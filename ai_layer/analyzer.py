@@ -5,9 +5,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    "gemini-2.5-flash:generateContent"
+    f"https://generativelanguage.googleapis.com/v1beta/models/"
+    f"{GEMINI_MODEL}:generateContent"
 )
 
 
@@ -37,10 +38,14 @@ Return ONLY valid JSON with these exact keys:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json"},
     }
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            res = await client.post(f"{GEMINI_URL}?key={api_key}", json=payload)
+            res = await client.post(GEMINI_URL, headers=headers, json=payload)
             res.raise_for_status()
             raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
             if raw_text.startswith("```"):
@@ -51,10 +56,18 @@ Return ONLY valid JSON with these exact keys:
                 "severity": parsed.get("severity", "HIGH"),
                 "suggested_fix": parsed.get("suggested_fix", "Manual review required."),
             }
-    except Exception as exc:
-        print(f"[AI Layer] Diagnosis error: {exc}")
+    except httpx.HTTPStatusError as exc:
+        err_msg = f"HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+        print(f"[AI Layer] Diagnosis error: {err_msg}")
         return {
-            "root_cause": f"LLM diagnosis failed: {exc}",
+            "root_cause": f"LLM diagnosis failed ({err_msg})",
+            "severity": "HIGH",
+            "suggested_fix": "Review the raw CI logs manually.",
+        }
+    except Exception as exc:
+        print(f"[AI Layer] Diagnosis error: {type(exc).__name__}")
+        return {
+            "root_cause": f"LLM diagnosis failed ({type(exc).__name__})",
             "severity": "HIGH",
             "suggested_fix": "Review the raw CI logs manually.",
         }
